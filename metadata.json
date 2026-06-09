@@ -1,0 +1,5 @@
+{
+  "name": "PortALL",
+  "description": "Sistema moderno de gestão de terceiros, visitantes e prestadores de serviço com controle de treinamentos e acesso.",
+  "requestFramePermissions": ["camera"]
+}
