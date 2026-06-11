@@ -475,6 +475,31 @@ router.use((req: AuthRequest, res: Response, next) => {
   next();
 });
 
+// Helper to resolve third-party company ID, creating it on the fly if a custom name is typed
+async function resolveEmpresaOrigem(empresaOrigemId: string | undefined, companyId: string): Promise<string | null> {
+  if (!empresaOrigemId) return null;
+  // If it's a UUID, return it
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(empresaOrigemId)) {
+    return empresaOrigemId;
+  }
+  const nameTrimmed = empresaOrigemId.trim();
+  if (!nameTrimmed) return null;
+  
+  const existing = await queryOne<{ id: string }>(
+    'SELECT id FROM empresas_terceiro WHERE company_id = $1 AND LOWER(name) = LOWER($2)',
+    [companyId, nameTrimmed]
+  );
+  if (existing) {
+    return existing.id;
+  }
+  
+  const newCo = await queryOne<{ id: string }>(
+    `INSERT INTO empresas_terceiro (company_id, name) VALUES ($1, $2) RETURNING id`,
+    [companyId, nameTrimmed]
+  );
+  return newCo?.id || null;
+}
+
 // ============================================================
 // POST /api/pessoas
 // ============================================================
@@ -501,7 +526,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
            OR 
            parent_id IN (SELECT company_id FROM user_companies WHERE user_id = $2)
          )`,
-        [companyId, req.user.userId]
+         [companyId, req.user.userId]
       );
       if (!hasAccess) {
         res.status(403).json({ error: 'Você não tem permissão para cadastrar pessoas nesta unidade.' });
@@ -515,6 +540,8 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       isApproved = false;
     }
 
+    const finalEmpresaOrigemId = await resolveEmpresaOrigem(empresaOrigemId, companyId);
+
     // Insere a pessoa
     const pessoa = await queryOne<{ id: string }>(
       `INSERT INTO pessoas (
@@ -525,7 +552,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
       RETURNING id`,
       [
-        companyId, tipoAcesso, foto, nomeCompleto, documento, empresaOrigemId || null, responsavelInterno,
+        companyId, tipoAcesso, foto, nomeCompleto, documento, finalEmpresaOrigemId || null, responsavelInterno,
         celularAutorizado, celularImei || null, notebookAutorizado, notebookMarca || null, 
         notebookPatrimonio || null, liberadoAte || null, descricaoAtividade,
         tipoAcesso === 'prestador' ? (atividadeId || null) : null,
@@ -735,6 +762,8 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
       treinamentos
     } = req.body;
 
+    const finalEmpresaOrigemId = await resolveEmpresaOrigem(empresaOrigemId, companyId);
+
     // Atualiza dados da pessoa
     await query(
       `UPDATE pessoas SET 
@@ -746,7 +775,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
         epi_descricao = $18, updated_at = NOW()
        WHERE id = $19`,
       [
-        companyId, tipoAcesso, foto, nomeCompleto, documento, empresaOrigemId || null, responsavelInterno,
+        companyId, tipoAcesso, foto, nomeCompleto, documento, finalEmpresaOrigemId || null, responsavelInterno,
         celularAutorizado, celularImei || null, notebookAutorizado, notebookMarca || null, 
         notebookPatrimonio || null, liberadoAte || null, descricaoAtividade,
         tipoAcesso === 'prestador' ? (atividadeId || null) : null,

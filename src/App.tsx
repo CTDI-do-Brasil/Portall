@@ -382,10 +382,11 @@ function Select({ label, value, onChange, children, required }: {
   );
 }
 
-function SearchableSelect({ value, onChange, options, placeholder, required }: {
+function SearchableSelect({ value, onChange, options, placeholder, required, allowCustom }: {
   value: string; onChange: (v: string) => void;
   options: { value: string; label: string }[];
   placeholder?: string; required?: boolean;
+  allowCustom?: boolean;
 }) {
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -397,9 +398,14 @@ function SearchableSelect({ value, onChange, options, placeholder, required }: {
     };
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setIsOpen(false);
-      if (e.key === 'Enter' && isOpen && filtered.length > 0) {
-        onChange(filtered[0].value);
-        setIsOpen(false);
+      if (e.key === 'Enter' && isOpen) {
+        if (filtered.length > 0) {
+          onChange(filtered[0].value);
+          setIsOpen(false);
+        } else if (allowCustom && search.trim() !== '') {
+          onChange(search.trim());
+          setIsOpen(false);
+        }
       }
     };
     document.addEventListener('mousedown', handleClick);
@@ -408,11 +414,12 @@ function SearchableSelect({ value, onChange, options, placeholder, required }: {
       document.removeEventListener('mousedown', handleClick);
       document.removeEventListener('keydown', handleKey);
     };
-  }, [isOpen, search, onChange]);
+  }, [isOpen, search, onChange, allowCustom]);
 
   const safeOptions = options || [];
-  const selectedLabel = safeOptions.find(o => o.value === value)?.label || '';
+  const selectedLabel = safeOptions.find(o => o.value === value)?.label || value || '';
   const filtered = safeOptions.filter(o => (o.label || '').toLowerCase().includes(search.toLowerCase()));
+  const showAddCustom = allowCustom && search.trim() !== '' && !safeOptions.some(o => o.label.toLowerCase() === search.toLowerCase().trim());
 
   return (
     <div ref={containerRef} className="relative">
@@ -438,22 +445,33 @@ function SearchableSelect({ value, onChange, options, placeholder, required }: {
             exit={{ opacity: 0, y: -10 }}
             className="absolute z-[100] w-full mt-1 bg-white rounded-xl border border-slate-200 shadow-xl max-h-48 overflow-y-auto no-scrollbar"
           >
-            {filtered.length === 0 ? (
+            {filtered.length === 0 && !showAddCustom ? (
               <div className="px-3 py-4 text-center text-xs text-slate-400">Nenhum resultado</div>
             ) : (
-              filtered.map(o => (
-                <button 
-                  key={o.value} 
-                  type="button"
-                  onClick={() => { onChange(o.value); setIsOpen(false); setSearch(''); }}
-                  className={cn(
-                    "w-full text-left px-3 py-2 text-sm transition-colors hover:bg-blue-50",
-                    value && o.value === value ? "text-blue-600 font-bold bg-blue-50/50" : "text-slate-700"
-                  )}
-                >
-                  {o.label || 'Sem nome'}
-                </button>
-              ))
+              <>
+                {filtered.map(o => (
+                  <button 
+                    key={o.value} 
+                    type="button"
+                    onClick={() => { onChange(o.value); setIsOpen(false); setSearch(''); }}
+                    className={cn(
+                      "w-full text-left px-3 py-2 text-sm transition-colors hover:bg-blue-50",
+                      value && o.value === value ? "text-blue-600 font-bold bg-blue-50/50" : "text-slate-700"
+                    )}
+                  >
+                    {o.label || 'Sem nome'}
+                  </button>
+                ))}
+                {showAddCustom && (
+                  <button
+                    type="button"
+                    onClick={() => { onChange(search.trim()); setIsOpen(false); setSearch(''); }}
+                    className="w-full text-left px-3 py-2.5 text-sm transition-colors hover:bg-emerald-50 text-emerald-600 font-semibold border-t border-slate-100 flex items-center gap-1.5"
+                  >
+                    <Plus size={14} /> Cadastrar: "{search.trim()}"
+                  </button>
+                )}
+              </>
             )}
           </motion.div>
         )}
@@ -2115,6 +2133,7 @@ function PessoasView({ profile }: { profile: UserProfile }) {
                     onChange={v => setForm(f => ({ ...f, empresaOrigemId: v }))}
                     options={empresasTerceiro.map(e => ({ value: e.id, label: e.name }))}
                     required
+                    allowCustom
                   />
                 </div>
 
