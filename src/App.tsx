@@ -13,13 +13,14 @@ import {
   Upload, ArrowRightCircle, ArrowLeftCircle, RefreshCw, BookOpen,
   Briefcase, UserCog, Bell, Home, Mail, LayoutGrid, List,
   UserX, UserPlus, Power, ExternalLink, Copy, FileText, Package,
-  ArrowRight, Lock, FileDown, Download, History
+  ArrowRight, Lock, FileDown, Download, History, CreditCard, Radio
 } from 'lucide-react';
 import { format, parseISO, isValid } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
 import SignatureCanvas from 'react-signature-canvas';
+import { useNfcBridge } from './hooks/useNfcBridge';
 
 // Custom CSS for Modal scrollbar
 const modalStyles = `
@@ -907,7 +908,11 @@ function LoginPage({ onLogin }: { onLogin: (user: UserProfile) => void }) {
   );
 }
 
-function Header({ profile, onLogout }: { profile: UserProfile; onLogout: () => void }) {
+function Header({ profile, onLogout, nfcStatus }: { 
+  profile: UserProfile; 
+  onLogout: () => void; 
+  nfcStatus?: { isConnected: boolean; readerName: string | null } 
+}) {
   return (
     <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0 z-30 shadow-sm">
       <div className="flex items-center gap-3">
@@ -915,6 +920,26 @@ function Header({ profile, onLogout }: { profile: UserProfile; onLogout: () => v
       </div>
       
       <div className="flex items-center gap-3">
+        {nfcStatus && (
+          <div 
+            className={cn(
+              "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all border shadow-sm",
+              nfcStatus.isConnected
+                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                : "bg-slate-50 text-slate-400 border-slate-200"
+            )} 
+            title={nfcStatus.isConnected ? `Bridge NFC Ativo: ${nfcStatus.readerName || 'ACR122U Pronto'}` : "Serviço NFC Offline (Execute iniciar-leitor.bat na pasta nfc-bridge)"}
+          >
+            <span className={cn("w-2 h-2 rounded-full", nfcStatus.isConnected ? "bg-emerald-500 animate-pulse" : "bg-slate-300")} />
+            <Radio size={14} className={nfcStatus.isConnected ? "text-emerald-600" : "text-slate-400"} />
+            <span className="hidden sm:inline">
+              {nfcStatus.isConnected 
+                ? (nfcStatus.readerName ? nfcStatus.readerName.split(' ')[0] : 'NFC Conectado') 
+                : 'NFC Offline'}
+            </span>
+          </div>
+        )}
+
         <button onClick={onLogout} className="p-2 rounded-xl text-slate-400 hover:text-red-600 hover:bg-red-50 transition-all group" title="Sair do sistema">
           <LogOut size={20} className="group-hover:translate-x-0.5 transition-transform" />
         </button>
@@ -1050,6 +1075,26 @@ function PortariaView({ profile, companies }: { profile: UserProfile, companies:
   const [presenceFilter, setPresenceFilter] = useState<'all' | 'on-site' | 'off-site'>('all');
   const [showTermsFor, setShowTermsFor] = useState<Pessoa | null>(null);
   const [approvingPessoa, setApprovingPessoa] = useState<{ id: string; nome: string } | null>(null);
+  const [nfcAlert, setNfcAlert] = useState<{ message: string; type: 'success' | 'warning' } | null>(null);
+
+  const { isConnected: nfcConnected } = useNfcBridge({
+    onTagDetected: async (tag) => {
+      try {
+        const found = await api.get<Pessoa>(`/pessoas/nfc/${tag.uid}`);
+        if (found) {
+          setSelected(found);
+          setNfcAlert({ message: `🏷️ Crachá ${tag.uid} detectado: ${found.nomeCompleto}`, type: 'success' });
+          setTimeout(() => setNfcAlert(null), 4000);
+        }
+      } catch (err: any) {
+        setNfcAlert({ 
+          message: `⚠️ Cartão aproximado (${tag.uid}) não está cadastrado no sistema.`, 
+          type: 'warning' 
+        });
+        setTimeout(() => setNfcAlert(null), 5000);
+      }
+    }
+  });
 
   useEffect(() => { fetchPessoas(); }, []);
 
@@ -1058,12 +1103,17 @@ function PortariaView({ profile, companies }: { profile: UserProfile, companies:
   };
 
   const baseFiltered = pessoas.filter(p => {
-    const term = search.toLowerCase();
+    const term = search.toLowerCase().trim();
+    const cleanTerm = term.replace(/[^a-fA-F0-9]/g, '');
+    const cleanNfc = (p.nfcUid || '').replace(/[^a-fA-F0-9]/g, '').toLowerCase();
+    const matchesNfc = cleanTerm.length >= 3 && cleanNfc.includes(cleanTerm);
+
     const matchesText = !search || 
       p.nomeCompleto.toLowerCase().includes(term) ||
       (p.empresaOrigemNome || '').toLowerCase().includes(term) ||
       (term.replace(/\D/g, '') && p.documento.replace(/\D/g, '').includes(term.replace(/\D/g, ''))) ||
-      p.documento.toLowerCase().includes(term);
+      p.documento.toLowerCase().includes(term) ||
+      matchesNfc;
     
     const matchesStatus = true; // Handled later
     const matchesType = typeFilter === 'all' || p.tipoAcesso === typeFilter;
@@ -1181,10 +1231,47 @@ function PortariaView({ profile, companies }: { profile: UserProfile, companies:
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">Portaria</h1>
-        <p className="text-sm text-slate-500 mt-1">Registre a entrada e saída de visitantes e prestadores.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Portaria</h1>
+          <p className="text-sm text-slate-500 mt-1">Registre a entrada e saída de visitantes e prestadores.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {nfcConnected ? (
+            <span className="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-sm">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+              Leitor ACR122U Pronto para Ler Crachá
+            </span>
+          ) : (
+            <span className="text-xs font-bold text-slate-400 bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-xl flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-slate-300" />
+              NFC Offline
+            </span>
+          )}
+        </div>
       </div>
+
+      <AnimatePresence>
+        {nfcAlert && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className={cn(
+              "p-4 rounded-2xl border flex items-center gap-3 shadow-md",
+              nfcAlert.type === 'success' 
+                ? "bg-emerald-50 text-emerald-800 border-emerald-200" 
+                : "bg-amber-50 text-amber-800 border-amber-200"
+            )}
+          >
+            <Radio size={20} className={nfcAlert.type === 'success' ? 'text-emerald-600' : 'text-amber-600'} />
+            <p className="text-sm font-bold flex-1">{nfcAlert.message}</p>
+            <button onClick={() => setNfcAlert(null)} className="text-slate-400 hover:text-slate-700 p-1">
+              <X size={16} />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-4">
@@ -1702,6 +1789,7 @@ type PessoaForm = {
   atividadeId: string; asoDataRealizacao: string; epiObrigatorio: boolean; epiDescricao: string;
   treinamentos: { treinamentoId: string; dataRealizacao: string }[];
   companyId: string;
+  nfcUid: string;
 };
 
 const emptyPessoaForm = (): PessoaForm => ({
@@ -1713,6 +1801,7 @@ const emptyPessoaForm = (): PessoaForm => ({
   asoDataRealizacao: '', epiObrigatorio: false, epiDescricao: '',
   treinamentos: [],
   companyId: '',
+  nfcUid: '',
 });
 
 function CompanySelectOptions({ companies }: { companies: Company[] }) {
@@ -1762,6 +1851,17 @@ function PessoasView({ profile }: { profile: UserProfile }) {
   const [termView, setTermView] = useState<Pessoa | null>(null);
   const [showTermsFor, setShowTermsFor] = useState<Pessoa | null>(null);
   const [approvingPessoa, setApprovingPessoa] = useState<{ id: string; nome: string } | null>(null);
+  const [nfcFeedback, setNfcFeedback] = useState<string | null>(null);
+
+  const { isConnected: nfcConnected } = useNfcBridge({
+    onTagDetected: (tag) => {
+      if (showForm) {
+        setForm(f => ({ ...f, nfcUid: tag.uid }));
+        setNfcFeedback(`🏷️ Crachá ${tag.uid} capturado com sucesso!`);
+        setTimeout(() => setNfcFeedback(null), 4000);
+      }
+    }
+  });
 
   useEffect(() => { fetchAll(); }, []);
 
@@ -1892,7 +1992,8 @@ function PessoasView({ profile }: { profile: UserProfile }) {
         treinamentoId: t.treinamentoId, 
         dataRealizacao: t.dataRealizacao ? t.dataRealizacao.split('T')[0] : '' 
       })) : [],
-      companyId: p.companyId
+      companyId: p.companyId,
+      nfcUid: p.nfcUid || ''
     });
     setShowForm(true);
   };
@@ -1953,7 +2054,17 @@ function PessoasView({ profile }: { profile: UserProfile }) {
   const removeTreinamento = (i: number) => setForm(f => ({ ...f, treinamentos: f.treinamentos.filter((_, idx) => idx !== i) }));
 
   const filtered = pessoas
-    .filter(p => !search || p.nomeCompleto.toLowerCase().includes(search.toLowerCase()) || (p.empresaOrigemNome || '').toLowerCase().includes(search.toLowerCase()) || p.documento.toLowerCase().includes(search.toLowerCase()))
+    .filter(p => {
+      const term = search.toLowerCase().trim();
+      const cleanTerm = term.replace(/[^a-fA-F0-9]/g, '');
+      const cleanNfc = (p.nfcUid || '').replace(/[^a-fA-F0-9]/g, '').toLowerCase();
+      const matchesNfc = cleanTerm.length >= 3 && cleanNfc.includes(cleanTerm);
+      return !search || 
+        p.nomeCompleto.toLowerCase().includes(term) || 
+        (p.empresaOrigemNome || '').toLowerCase().includes(term) || 
+        p.documento.toLowerCase().includes(term) ||
+        matchesNfc;
+    })
     .filter(p => !filterStatus || p.statusAcesso === filterStatus);
 
   return (
@@ -2013,7 +2124,14 @@ function PessoasView({ profile }: { profile: UserProfile }) {
                         : <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center text-sm font-bold text-blue-600">{p.nomeCompleto[0]}</div>}
                       <div>
                         <p className="text-sm font-semibold text-slate-900">{p.nomeCompleto}</p>
-                        <p className="text-xs text-slate-400">{p.documento}</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-xs text-slate-400">{p.documento}</span>
+                          {p.nfcUid && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-blue-700 bg-blue-50 border border-blue-200/70 px-1.5 py-0.5 rounded" title={`Crachá NFC: ${p.nfcUid}`}>
+                              <CreditCard size={10} className="text-blue-500" /> {p.nfcUid}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </td>
@@ -2095,6 +2213,12 @@ function PessoasView({ profile }: { profile: UserProfile }) {
         {showForm && (
           <Modal title={editTarget ? 'Editar Cadastro' : 'Novo Cadastro'} onClose={() => setShowForm(false)} size="xl">
             <form onSubmit={handleSave} className="space-y-6">
+              {nfcFeedback && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-bold text-emerald-700 flex items-center gap-2 animate-pulse">
+                  <CheckCircle2 size={16} /> {nfcFeedback}
+                </div>
+              )}
+
               {/* Tipo + Foto */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <PhotoPicker value={form.foto} onChange={v => setForm(f => ({ ...f, foto: v }))} />
@@ -2123,6 +2247,40 @@ function PessoasView({ profile }: { profile: UserProfile }) {
                     placeholder={docType === 'CPF' ? '000.000.000-00' : 'Número do RG'}
                     className="w-full px-3 py-2.5 rounded-lg border border-slate-200 bg-white text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500" 
                   />
+                </div>
+
+                {/* Crachá NFC ACR122 */}
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Crachá / Tag NFC (ACR122)</label>
+                    {nfcConnected ? (
+                      <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> Leitor Ativo
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-slate-400">Leitor offline</span>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <input 
+                      value={form.nfcUid} 
+                      onChange={e => setForm(f => ({ ...f, nfcUid: e.target.value.toUpperCase() }))} 
+                      placeholder="Aproxime o crachá no leitor..."
+                      className="w-full pl-8 pr-8 py-2.5 rounded-lg border border-slate-200 bg-white text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 font-mono uppercase tracking-wider" 
+                    />
+                    <CreditCard size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                    {form.nfcUid && (
+                      <button 
+                        type="button" 
+                        onClick={() => setForm(f => ({ ...f, nfcUid: '' }))}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-red-500"
+                        title="Remover crachá"
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-slate-400">Ao aproximar o cartão no ACR122, o UID é preenchido automaticamente.</p>
                 </div>
 
                 <div className="space-y-1 relative">
@@ -3477,8 +3635,8 @@ export default function App() {
   const [resetToken, setResetToken] = useState<string | null>(null);
   const [resetPw, setResetPw] = useState('');
   const [resetConfirm, setResetConfirm] = useState('');
-  const [resetMsg, setResetMsg] = useState('');
   const [resetLoading, setResetLoading] = useState(false);
+  const { isConnected: nfcConnected, readerName: nfcReaderName } = useNfcBridge();
 
   // Detecção de rotas públicas via link
   const [publicApproveData, setPublicApproveData] = useState<{ id: string, approver: string } | null>(null);
@@ -3637,7 +3795,7 @@ export default function App() {
 
       {/* Desktop Header */}
       <div className="hidden md:block">
-        <Header profile={profile} onLogout={handleLogout} />
+        <Header profile={profile} onLogout={handleLogout} nfcStatus={{ isConnected: nfcConnected, readerName: nfcReaderName }} />
       </div>
       
       <div className="flex flex-1 overflow-hidden relative">
@@ -4512,9 +4670,17 @@ function NFCScannerView() {
   const [result, setResult] = useState<{ success: boolean, message: string, acao?: string, duracao?: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Web NFC States
+  // Web NFC States (Mobile)
   const [nfcSupported, setNfcSupported] = useState(false);
   const [nfcStatus, setNfcStatus] = useState<'idle' | 'scanning' | 'error'>('idle');
+
+  // WebSocket Bridge para ACR122U Desktop
+  const { isConnected: nfcBridgeConnected, readerName } = useNfcBridge({
+    onTagDetected: (tagEvent) => {
+      setTag(tagEvent.uid);
+      handleSearchFromNFC(tagEvent.uid);
+    }
+  });
 
   useEffect(() => {
     if ('NDEFReader' in window) {
@@ -4691,8 +4857,17 @@ function NFCScannerView() {
               >
                 <div className="space-y-4">
                   <div className="flex flex-col items-center gap-2 mb-2">
-                    <div className="px-3 py-1 bg-slate-100 text-slate-500 rounded-full text-[10px] font-black uppercase tracking-widest">Aguardando Leitura</div>
-                    <h2 className="text-lg font-bold text-slate-800">Aproxime o dispositivo ou digite</h2>
+                    {nfcBridgeConnected ? (
+                      <div className="px-3 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 shadow-sm">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+                        Leitor ACR122U Ativo
+                      </div>
+                    ) : (
+                      <div className="px-3 py-1 bg-slate-100 text-slate-500 rounded-full text-[10px] font-black uppercase tracking-widest">
+                        Aguardando Leitura
+                      </div>
+                    )}
+                    <h2 className="text-lg font-bold text-slate-800">Aproxime o crachá/tag ou digite</h2>
                   </div>
                   
                   <div className="relative group">
@@ -4702,7 +4877,7 @@ function NFCScannerView() {
                       value={tag}
                       onChange={e => setTag(e.target.value)}
                       placeholder="TAG / SERIAL"
-                      className="w-full text-center text-3xl font-black font-mono h-24 rounded-[1.5rem] border-4 border-slate-100 bg-slate-50/50 focus:border-blue-500 focus:bg-white focus:ring-8 focus:ring-blue-500/5 transition-all outline-none placeholder:text-slate-200"
+                      className="w-full text-center text-3xl font-black font-mono h-24 rounded-[1.5rem] border-4 border-slate-100 bg-slate-50/50 focus:border-blue-500 focus:bg-white focus:ring-8 focus:ring-blue-500/5 transition-all outline-none placeholder:text-slate-200 uppercase"
                       autoFocus
                       disabled={loading}
                     />

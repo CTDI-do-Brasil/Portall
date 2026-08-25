@@ -102,6 +102,8 @@ export async function initDB(): Promise<void> {
     await client.query('ALTER TABLE romaneios ADD COLUMN IF NOT EXISTS vigilante_signature_hash TEXT');
     await client.query('ALTER TABLE romaneios ADD COLUMN IF NOT EXISTS vigilante_localizacao TEXT');
     await client.query('ALTER TABLE romaneios ADD COLUMN IF NOT EXISTS codigo_sequencial SERIAL');
+    await client.query('ALTER TABLE pessoas ADD COLUMN IF NOT EXISTS nfc_uid VARCHAR(100)');
+    await client.query('CREATE INDEX IF NOT EXISTS idx_pessoas_nfc_uid ON pessoas(nfc_uid)');
     console.log('✅ Migrações de colunas concluídas.');
 
     // Cria admin inicial se não existir nenhum usuário

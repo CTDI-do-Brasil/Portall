@@ -309,6 +309,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
         lastPresenceStatus: p.last_presence_status,
         lastPresenceTimestamp: p.last_presence_timestamp,
         armario: p.last_presence_status === 'entrada' ? p.current_armario : null,
+        nfcUid: p.nfc_uid,
         isActive: !!p.is_active
       };
     });
@@ -317,6 +318,120 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   } catch (err) {
     console.error('GET /pessoas error:', err);
     res.status(500).json({ error: 'Erro ao buscar pessoas.' });
+  }
+});
+
+// ============================================================
+// GET /api/pessoas/nfc/:uid - Busca pessoa por UID de crachá NFC
+// ============================================================
+router.get('/nfc/:uid', async (req: AuthRequest, res: Response) => {
+  try {
+    const { uid } = req.params;
+    const cleanUid = String(uid).replace(/[^a-fA-F0-9]/g, '').toUpperCase();
+
+    const baseFields = `
+      p.*, p.is_active as "isActive", e.name as empresa_origem_nome, t.nome as atividade_nome,
+      pl.status as last_presence_status, pl.timestamp as last_presence_timestamp,
+      pl.armario as current_armario
+    `;
+    const fromClause = `
+      FROM pessoas p
+      LEFT JOIN empresas_terceiro e ON p.empresa_origem_id = e.id
+      LEFT JOIN tipos_atividade t ON p.atividade_id = t.id
+      LEFT JOIN LATERAL (
+        SELECT status, timestamp, armario
+        FROM presenca_logs 
+        WHERE pessoa_id = p.id 
+        ORDER BY timestamp DESC 
+        LIMIT 1
+      ) pl ON true
+    `;
+
+    const p = await queryOne<any>(
+      `SELECT ${baseFields} ${fromClause} 
+       WHERE (UPPER(REPLACE(COALESCE(p.nfc_uid, ''), ':', '')) = $1 OR UPPER(COALESCE(p.nfc_uid, '')) = $1)
+         AND p.is_active = TRUE`,
+      [cleanUid]
+    );
+
+    if (!p) {
+      res.status(404).json({ error: 'Nenhum cadastro ativo associado a este crachá NFC.' });
+      return;
+    }
+
+    // Busca treinamentos
+    const treinamentos = await query(
+      `SELECT tp.*, t.nome, t.codigo 
+       FROM treinamentos_pessoa tp
+       JOIN tipos_treinamento t ON tp.treinamento_id = t.id
+       WHERE tp.pessoa_id = $1`,
+      [p.id]
+    );
+
+    const now = new Date();
+    const in90Days = new Date();
+    in90Days.setDate(in90Days.getDate() + 90);
+
+    const mappedTreinamentos = treinamentos.map((l: any) => {
+      const dataVenc = new Date(l.data_vencimento);
+      let statusTreinamento: 'Vencido' | 'A Vencer' | 'Válido';
+      if (dataVenc < now) statusTreinamento = 'Vencido';
+      else if (dataVenc <= in90Days) statusTreinamento = 'A Vencer';
+      else statusTreinamento = 'Válido';
+
+      return {
+        treinamentoId: l.treinamento_id,
+        treinamentoNome: l.nome,
+        treinamentoCodigo: l.codigo,
+        dataRealizacao: l.data_realizacao,
+        dataVencimento: l.data_vencimento,
+        statusTreinamento
+      };
+    });
+
+    let asoVencimento = null;
+    if (p.aso_data_realizacao) {
+       asoVencimento = new Date(p.aso_data_realizacao);
+       asoVencimento.setFullYear(asoVencimento.getFullYear() + 1);
+    }
+    
+    const liberadoAteDate = p.liberado_ate ? new Date(p.liberado_ate) : null;
+    const isApproved = !!p.is_approved;
+    const vencimentos = mappedTreinamentos.map(t => ({ vencimento: new Date(t.dataVencimento) }));
+    const statusAcesso = calculateStatus(liberadoAteDate, asoVencimento, vencimentos, isApproved);
+
+    res.json({
+      id: p.id,
+      companyId: p.company_id,
+      tipoAcesso: p.tipo_acesso,
+      foto: mapFotoUrl(p.foto),
+      nomeCompleto: p.nome_completo,
+      documento: p.documento,
+      empresaOrigemId: p.empresa_origem_id,
+      empresaOrigemNome: p.empresa_origem_nome,
+      responsavelInterno: p.responsavel_interno,
+      celularAutorizado: p.celular_autorizado,
+      notebookAutorizado: p.notebook_autorizado,
+      liberadoAte: p.liberado_ate,
+      descricaoAtividade: p.descricao_atividade,
+      atividadeId: p.atividade_id,
+      atividadeNome: p.atividade_nome,
+      asoDataRealizacao: p.aso_data_realizacao,
+      epiObrigatorio: p.epi_obrigatorio,
+      epiDescricao: p.epi_descricao,
+      isApproved,
+      statusAcesso,
+      treinamentos: mappedTreinamentos,
+      lastPresenceStatus: p.last_presence_status,
+      lastPresenceTimestamp: p.last_presence_timestamp,
+      armario: p.last_presence_status === 'entrada' ? p.current_armario : null,
+      nfcUid: p.nfc_uid,
+      isActive: !!p.is_active,
+      termoAssinadoEm: p.termo_assinado_at
+    });
+  } catch (err) {
+    console.error('GET /pessoas/nfc/:uid error:', err);
+    res.status(500).json({ error: 'Erro ao buscar por NFC.' });
   }
 });
 
@@ -434,6 +549,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
       lastPresenceStatus: p.last_presence_status,
       lastPresenceTimestamp: p.last_presence_timestamp,
       armario: p.last_presence_status === 'entrada' ? p.current_armario : null,
+      nfcUid: p.nfc_uid,
       isActive: !!p.is_active,
       termoAssinadoEm: p.termo_assinado_at
     });
@@ -510,7 +626,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       celularAutorizado, celularImei, notebookAutorizado, notebookMarca, notebookPatrimonio,
       liberadoAte, descricaoAtividade,
       atividadeId, asoDataRealizacao, epiObrigatorio, epiDescricao,
-      treinamentos // ARRAY de treinamentos [{ treinamentoId, dataRealizacao }]
+      treinamentos, nfcUid // ARRAY de treinamentos [{ treinamentoId, dataRealizacao }]
     } = req.body;
 
     if (!companyId || !nomeCompleto || !documento || !responsavelInterno) {
@@ -541,6 +657,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     }
 
     const finalEmpresaOrigemId = await resolveEmpresaOrigem(empresaOrigemId, companyId);
+    const cleanNfcUid = nfcUid ? String(nfcUid).replace(/[^a-fA-F0-9]/g, '').toUpperCase() : null;
 
     // Insere a pessoa
     const pessoa = await queryOne<{ id: string }>(
@@ -548,8 +665,8 @@ router.post('/', async (req: AuthRequest, res: Response) => {
         company_id, tipo_acesso, foto, nome_completo, documento, empresa_origem_id, responsavel_interno,
         celular_autorizado, celular_imei, notebook_autorizado, notebook_marca, notebook_patrimonio, 
         liberado_ate, descricao_atividade, atividade_id, aso_data_realizacao, epi_obrigatorio, 
-        epi_descricao, created_by, is_approved
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+        epi_descricao, created_by, is_approved, nfc_uid
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
       RETURNING id`,
       [
         companyId, tipoAcesso, foto, nomeCompleto, documento, finalEmpresaOrigemId || null, responsavelInterno,
@@ -560,7 +677,8 @@ router.post('/', async (req: AuthRequest, res: Response) => {
         tipoAcesso === 'prestador' ? epiObrigatorio : false,
         tipoAcesso === 'prestador' ? epiDescricao : null,
         req.user!.userId,
-        isApproved
+        isApproved,
+        cleanNfcUid || null
       ]
     );
 
@@ -759,10 +877,11 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
       celularAutorizado, celularImei, notebookAutorizado, notebookMarca, notebookPatrimonio,
       liberadoAte, descricaoAtividade,
       atividadeId, asoDataRealizacao, epiObrigatorio, epiDescricao,
-      treinamentos
+      treinamentos, nfcUid
     } = req.body;
 
     const finalEmpresaOrigemId = await resolveEmpresaOrigem(empresaOrigemId, companyId);
+    const cleanNfcUid = nfcUid ? String(nfcUid).replace(/[^a-fA-F0-9]/g, '').toUpperCase() : null;
 
     // Atualiza dados da pessoa
     await query(
@@ -772,8 +891,8 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
         celular_imei = $9, notebook_autorizado = $10, notebook_marca = $11, 
         notebook_patrimonio = $12, liberado_ate = $13, descricao_atividade = $14, 
         atividade_id = $15, aso_data_realizacao = $16, epi_obrigatorio = $17, 
-        epi_descricao = $18, updated_at = NOW()
-       WHERE id = $19`,
+        epi_descricao = $18, nfc_uid = $19, updated_at = NOW()
+       WHERE id = $20`,
       [
         companyId, tipoAcesso, foto, nomeCompleto, documento, finalEmpresaOrigemId || null, responsavelInterno,
         celularAutorizado, celularImei || null, notebookAutorizado, notebookMarca || null, 
@@ -782,6 +901,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
         asoDataRealizacao || null, 
         tipoAcesso === 'prestador' ? epiObrigatorio : false,
         tipoAcesso === 'prestador' ? epiDescricao : null,
+        cleanNfcUid || null,
         id
       ]
     );

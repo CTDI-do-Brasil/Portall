@@ -1,0 +1,14 @@
+﻿{
+  "name": "portall-nfc-bridge",
+  "version": "1.0.0",
+  "description": "Bridge local WebSocket para comunicação entre leitores NFC ACR122U e o Portall Web",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "nfc-pcsc": "^0.8.1",
+    "ws": "^8.18.0"
+  }
+}

@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS pessoas (
   termo_assinado_at TIMESTAMPTZ,
   termo_assinatura TEXT,
 
+  nfc_uid VARCHAR(100),
   created_by UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()

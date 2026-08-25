@@ -107,6 +107,7 @@ export interface Pessoa {
   termoAssinatura?: string;
 
   createdBy?: string;
+  nfcUid?: string;
   isActive: boolean;
   createdAt: string;
 }
