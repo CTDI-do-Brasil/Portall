@@ -1079,6 +1079,7 @@ function PortariaView({ profile, companies }: { profile: UserProfile, companies:
 
   const { isConnected: nfcConnected } = useNfcBridge({
     onTagDetected: async (tag) => {
+      setSearch(tag.uid);
       try {
         const found = await api.get<Pessoa>(`/pessoas/nfc/${tag.uid}`);
         if (found) {
@@ -1088,7 +1089,7 @@ function PortariaView({ profile, companies }: { profile: UserProfile, companies:
         }
       } catch (err: any) {
         setNfcAlert({ 
-          message: `⚠️ Cartão aproximado (${tag.uid}) não está cadastrado no sistema.`, 
+          message: `⚠️ Cartão ${tag.uid} lido com sucesso! Porém ainda não está vinculado a nenhum cadastro.`, 
           type: 'warning' 
         });
         setTimeout(() => setNfcAlert(null), 5000);
