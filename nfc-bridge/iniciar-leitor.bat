@@ -9,22 +9,14 @@ echo.
 
 cd /d "%~dp0"
 
-if not exist node_modules (
-    echo [INFO] Instalando dependencias necessarias para o leitor...
-    call npm.cmd install
-    if errorlevel 1 (
-        echo.
-        echo [AVISO] Falha ao executar npm install. Certifique-se de que o Node.js esta instalado.
-        pause
-    )
+if exist "%~dp0PortallNFCBridge.exe" (
+    echo [INFO] Iniciando Bridge NFC Nativo...
+    start "" "%~dp0PortallNFCBridge.exe"
+    echo [SUCESSO] Servico iniciado em segundo plano!
+    timeout /t 3 >nul
+    exit
+) else (
+    echo [INFO] Executando server.py...
+    python server.py
 )
-
-echo.
-echo [INFO] Iniciando Bridge NFC...
-echo.
-node server.js
-if errorlevel 1 (
-    echo.
-    echo [ERRO] O servico foi encerrado com erro.
-    pause
-)
+pause
