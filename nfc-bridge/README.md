@@ -13,14 +13,13 @@ Este módulo é um serviço local em segundo plano para capturar leituras do **A
 
 ## 🚀 Como Executar
 
-Basta dar um duplo clique no arquivo:
-👉 **`iniciar-leitor.bat`**
+### 1. Executar Manualmente (com tela de terminal aberta):
+👉 Dê um duplo clique em **`iniciar-leitor.bat`**
 
-Ou via terminal dentro da pasta `nfc-bridge`:
-```bash
-npm install
-node server.js
-```
+### 2. Iniciar Automaticamente com o Windows (em segundo plano, sem janela preta aberta):
+👉 Dê um duplo clique em **`instalar-inicializacao-automatica.bat`**
+
+*Caso queira desativar a inicialização automática no futuro, basta executar `remover-inicializacao-automatica.bat`.*
 
 ---
 
