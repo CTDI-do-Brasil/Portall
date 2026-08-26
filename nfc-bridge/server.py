@@ -9,17 +9,27 @@ import base64
 import struct
 import threading
 import ctypes
-from ctypes import byref, c_ulong, create_string_buffer, Structure, c_char_p, c_byte, c_void_p
+from ctypes import byref, c_size_t, create_string_buffer, Structure, c_char_p, c_byte, c_void_p, c_ulong, POINTER, c_long
+
+# Reconfigura encoding para evitar crash no Windows cp1252
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 PORT = 9191
 
 # ============================================================
-# PC/SC WinSCard Native Definitions
+# PC/SC WinSCard Native Definitions (64-bit Safe)
 # ============================================================
 winscard = ctypes.windll.winscard
 user32 = ctypes.windll.user32
 
+SCARDCONTEXT = c_size_t
+SCARDHANDLE = c_size_t
+DWORD = c_ulong
+LONG = c_long
+
 SCARD_SCOPE_USER = 0
+SCARD_SCOPE_SYSTEM = 2
 SCARD_SHARE_SHARED = 2
 SCARD_PROTOCOL_T0 = 1
 SCARD_PROTOCOL_T1 = 2
@@ -33,30 +43,47 @@ class SCARD_READERSTATEA(Structure):
     _fields_ = [
         ("szReader", c_char_p),
         ("pvUserData", c_void_p),
-        ("dwCurrentState", c_ulong),
-        ("dwEventState", c_ulong),
-        ("cbAtr", c_ulong),
+        ("dwCurrentState", DWORD),
+        ("dwEventState", DWORD),
+        ("cbAtr", DWORD),
         ("rgbAtr", c_byte * 36),
     ]
 
 class SCARD_IO_REQUEST(Structure):
     _fields_ = [
-        ("dwProtocol", c_ulong),
-        ("cbPciLength", c_ulong),
+        ("dwProtocol", DWORD),
+        ("cbPciLength", DWORD),
     ]
 
-try:
-    g_rgSCardT0Pci = SCARD_IO_REQUEST.in_dll(winscard, "g_rgSCardT0Pci")
-    g_rgSCardT1Pci = SCARD_IO_REQUEST.in_dll(winscard, "g_rgSCardT1Pci")
-except:
-    g_rgSCardT0Pci = SCARD_IO_REQUEST(1, 8)
-    g_rgSCardT1Pci = SCARD_IO_REQUEST(2, 8)
+g_rgSCardT0Pci = SCARD_IO_REQUEST(1, 8)
+g_rgSCardT1Pci = SCARD_IO_REQUEST(2, 8)
+
+# Tipagem estrita de funcoes WinSCard
+winscard.SCardEstablishContext.argtypes = [DWORD, c_void_p, c_void_p, POINTER(SCARDCONTEXT)]
+winscard.SCardEstablishContext.restype = LONG
+
+winscard.SCardListReadersA.argtypes = [SCARDCONTEXT, c_char_p, c_char_p, POINTER(DWORD)]
+winscard.SCardListReadersA.restype = LONG
+
+winscard.SCardGetStatusChangeA.argtypes = [SCARDCONTEXT, DWORD, POINTER(SCARD_READERSTATEA), DWORD]
+winscard.SCardGetStatusChangeA.restype = LONG
+
+winscard.SCardConnectA.argtypes = [SCARDCONTEXT, c_char_p, DWORD, DWORD, POINTER(SCARDHANDLE), POINTER(DWORD)]
+winscard.SCardConnectA.restype = LONG
+
+winscard.SCardTransmit.argtypes = [SCARDHANDLE, POINTER(SCARD_IO_REQUEST), c_char_p, DWORD, POINTER(SCARD_IO_REQUEST), c_char_p, POINTER(DWORD)]
+winscard.SCardTransmit.restype = LONG
+
+winscard.SCardDisconnect.argtypes = [SCARDHANDLE, DWORD]
+winscard.SCardDisconnect.restype = LONG
+
+winscard.SCardReleaseContext.argtypes = [SCARDCONTEXT]
+winscard.SCardReleaseContext.restype = LONG
 
 # ============================================================
 # Keyboard Simulation (Virtual Keyboard Wedge)
 # ============================================================
 def type_text(text, press_enter=True):
-    """Simula a digitação dos caracteres e opcionalmente tecla Enter"""
     try:
         time.sleep(0.05)
         for char in str(text):
@@ -67,22 +94,22 @@ def type_text(text, press_enter=True):
             shift = (vk >> 8) & 1
             
             if shift:
-                user32.keybd_event(0x10, 0, 0, 0) # Shift Down
-            user32.keybd_event(key_code, 0, 0, 0) # Key Down
-            user32.keybd_event(key_code, 0, 2, 0) # Key Up
+                user32.keybd_event(0x10, 0, 0, 0)
+            user32.keybd_event(key_code, 0, 0, 0)
+            user32.keybd_event(key_code, 0, 2, 0)
             if shift:
-                user32.keybd_event(0x10, 0, 2, 0) # Shift Up
+                user32.keybd_event(0x10, 0, 2, 0)
             time.sleep(0.015)
             
         if press_enter:
             time.sleep(0.05)
-            user32.keybd_event(0x0D, 0, 0, 0) # Enter Down
-            user32.keybd_event(0x0D, 0, 2, 0) # Enter Up
+            user32.keybd_event(0x0D, 0, 0, 0)
+            user32.keybd_event(0x0D, 0, 2, 0)
     except Exception as e:
-        print(f"[Wedge] Erro ao simular digitação: {e}")
+        print(f"[Wedge] Erro ao digitar: {e}")
 
 # ============================================================
-# WebSocket Server (Pure Python RFC 6455)
+# WebSocket Server
 # ============================================================
 clients = set()
 clients_lock = threading.Lock()
@@ -128,12 +155,12 @@ def broadcast_tag(uid, standard="ISO 14443-3A", atr=""):
     }
     
     print("\n" + "="*50)
-    print(f" [NFC] 🏷️  CARTÃO DETECTADO / BIPADO!")
-    print(f" [NFC] UID / Número: {clean_uid}")
-    print(f" [NFC] Padrão: {standard}")
+    print(f" [NFC] CARTAO DETECTADO / BIPADO!")
+    print(f" [NFC] UID / Numero: {clean_uid}")
+    print(f" [NFC] Padrao: {standard}")
     print("="*50 + "\n")
     
-    # 1. Envia via WebSocket para o Portall Web
+    # 1. WebSocket
     broadcast({
         "type": "NFC_TAG_DETECTED",
         "uid": clean_uid,
@@ -142,7 +169,7 @@ def broadcast_tag(uid, standard="ISO 14443-3A", atr=""):
         "timestamp": last_read_tag["timestamp"]
     })
     
-    # 2. Digita no campo ativo onde o cursor estiver (Keyboard Wedge)
+    # 2. Digita no cursor ativo (Keyboard Wedge)
     threading.Thread(target=type_text, args=(clean_uid, True), daemon=True).start()
 
 def handle_client(sock, addr):
@@ -246,20 +273,20 @@ def run_ws_server():
     try:
         server.bind(('0.0.0.0', PORT))
         server.listen(10)
-        print(f"📡 Servidor WebSocket e HTTP ativo na porta {PORT}")
+        print(f"[OK] Servidor WebSocket e HTTP ativo na porta {PORT}")
         while True:
             client_sock, addr = server.accept()
             t = threading.Thread(target=handle_client, args=(client_sock, addr), daemon=True)
             t.start()
     except Exception as e:
-        print(f"⚠️ Erro no servidor: {e}")
+        print(f"[ERRO] Falha no servidor: {e}")
 
 # ============================================================
 # PC/SC Monitoring Loop
 # ============================================================
 def read_card_uid(hContext, reader_bytes):
-    hCard = c_ulong()
-    active_proto = c_ulong()
+    hCard = SCARDHANDLE()
+    active_proto = DWORD()
     res = winscard.SCardConnectA(
         hContext, 
         reader_bytes, 
@@ -270,14 +297,13 @@ def read_card_uid(hContext, reader_bytes):
     )
     
     if res != 0:
-        # Tenta modo DIRECT se shared falhar
         return None
     
     try:
-        # APDU standard para ACR122U (Get Data / UID)
+        # APDU standard para ACR122U (Get Data / UID: FF CA 00 00 00)
         apdu = bytes([0xFF, 0xCA, 0x00, 0x00, 0x00])
         recv_buf = create_string_buffer(258)
-        recv_len = c_ulong(258)
+        recv_len = DWORD(258)
         pci = byref(g_rgSCardT1Pci) if active_proto.value == 2 else byref(g_rgSCardT0Pci)
         
         tx_res = winscard.SCardTransmit(hCard, pci, apdu, len(apdu), None, recv_buf, byref(recv_len))
@@ -289,9 +315,9 @@ def read_card_uid(hContext, reader_bytes):
             if sw1 == 0x90 and sw2 == 0x00 and len(data) > 0:
                 return data.hex().upper()
         
-        # Tentativa secundária: APDU de versão/ATR
+        # Tentativa secundaria (FF CA 01 00 00)
         apdu2 = bytes([0xFF, 0xCA, 0x01, 0x00, 0x00])
-        recv_len = c_ulong(258)
+        recv_len = DWORD(258)
         tx_res2 = winscard.SCardTransmit(hCard, pci, apdu2, len(apdu2), None, recv_buf, byref(recv_len))
         if tx_res2 == 0 and recv_len.value >= 2:
             resp = bytes(recv_buf.raw[:recv_len.value])
@@ -305,57 +331,53 @@ def read_card_uid(hContext, reader_bytes):
     
     return None
 
+def get_readers_list(hContext):
+    rlen = DWORD(1024)
+    buf = create_string_buffer(1024)
+    res = winscard.SCardListReadersA(hContext, None, buf, byref(rlen))
+    if res == 0 and rlen.value > 0:
+        return [r.strip() for r in buf.raw[:rlen.value].decode('latin-1').split('\x00') if r.strip()]
+    return []
+
 def run_pcsc_monitor():
     global current_reader_name
-    hContext = c_ulong()
-    res = winscard.SCardEstablishContext(SCARD_SCOPE_USER, 0, 0, byref(hContext))
+    hContext = SCARDCONTEXT()
+    res = winscard.SCardEstablishContext(SCARD_SCOPE_USER, None, None, byref(hContext))
     if res != 0:
-        print(f"[NFC] ⚠️ Falha ao inicializar contexto PC/SC: {hex(res)}")
+        print(f"[NFC] Falha ao inicializar contexto PC/SC: {hex(res & 0xFFFFFFFF)}")
         return
 
-    print("[NFC] 🔄 Monitor de leitor Smart Card / NFC iniciado com sucesso.")
+    print("[NFC] Monitor de leitor Smart Card / NFC ativo.")
     
-    # Dicionário para rastrear presença por leitor: { reader_name: bool }
     card_present_map = {}
     
     while True:
         try:
-            readers_len = c_ulong(0)
-            winscard.SCardListReadersA(hContext, None, None, byref(readers_len))
+            raw_readers = get_readers_list(hContext)
             
-            if readers_len.value <= 1:
+            if not raw_readers:
                 if current_reader_name is not None:
-                    print(f"[NFC] 🔴 Leitor desconectado: {current_reader_name}")
+                    print(f"[NFC] Leitor desconectado: {current_reader_name}")
                     broadcast({"type": "READER_DISCONNECTED", "reader": current_reader_name})
                     current_reader_name = None
                     card_present_map.clear()
                 time.sleep(1)
                 continue
             
-            buf = create_string_buffer(readers_len.value)
-            winscard.SCardListReadersA(hContext, None, buf, byref(readers_len))
-            raw_readers = [r.strip() for r in buf.raw.decode('latin-1').split('\x00') if r.strip()]
-            
-            if not raw_readers:
-                time.sleep(1)
-                continue
-            
-            # Prioriza leitores com PICC (Contactless NFC)
+            # Prioriza PICC (Contactless)
             picc_readers = [r for r in raw_readers if 'PICC' in r.upper()]
             active_readers = picc_readers if picc_readers else raw_readers
             
             primary_name = active_readers[0]
             if current_reader_name != primary_name:
                 current_reader_name = primary_name
-                print(f"[NFC] 🟢 Leitor NFC Pronto: {current_reader_name}")
+                print(f"[NFC] Leitor Pronto para uso: {current_reader_name}")
                 broadcast({"type": "READER_CONNECTED", "reader": current_reader_name})
             
-            # Cria array de estruturas para todos os leitores
             num_readers = len(active_readers)
             ReaderStatesArray = SCARD_READERSTATEA * num_readers
             r_states = ReaderStatesArray()
             
-            # Mantém referências aos bytes para evitar garbage collection
             name_bytes_list = []
             for i, r_name in enumerate(active_readers):
                 nb = r_name.encode('latin-1')
@@ -363,7 +385,6 @@ def run_pcsc_monitor():
                 r_states[i].szReader = nb
                 r_states[i].dwCurrentState = SCARD_STATE_UNAWARE
             
-            # Checa o estado com timeout de 300ms
             res_sc = winscard.SCardGetStatusChangeA(hContext, 300, r_states, num_readers)
             
             for i, r_name in enumerate(active_readers):
@@ -373,19 +394,17 @@ def run_pcsc_monitor():
                 
                 if is_present and not was_present:
                     card_present_map[r_name] = True
-                    # Extrai UID
                     uid = read_card_uid(hContext, name_bytes_list[i])
                     if uid:
                         broadcast_tag(uid, "Mifare / ISO 14443-3A")
                     else:
-                        # Fallback para ATR do evento
                         cb_atr = r_states[i].cbAtr
                         if cb_atr > 0:
                             atr_hex = bytes(r_states[i].rgbAtr[:cb_atr]).hex().upper()
                             broadcast_tag(atr_hex, "Tag PICC (ATR)", atr=atr_hex)
                 elif not is_present and was_present:
                     card_present_map[r_name] = False
-                    print(f"[NFC] ⚪ Cartão removido do leitor ({r_name})")
+                    print(f"[NFC] Cartao removido do leitor ({r_name})")
                     broadcast({"type": "NFC_TAG_REMOVED"})
             
             time.sleep(0.05)
@@ -394,16 +413,12 @@ def run_pcsc_monitor():
             time.sleep(0.5)
 
 if __name__ == "__main__":
-    print("""
-=====================================================
-🚀  PortALL - Bridge Local NFC ACR122U (Dual Mode)
-=====================================================
-📡 Modo 1: WebSocket (ws://localhost:9191)
-⌨️  Modo 2: Emulação de Teclado Automática (Wedge)
-📌 Leitor:  ACS ACR122U PICC Interface
-⚡ 100% Nativo Windows
-=====================================================
-""")
+    print("="*55)
+    print(" PortALL - Bridge Local NFC ACR122U (Dual Mode)")
+    print("="*55)
+    print(" [OK] Modo 1: WebSocket (ws://localhost:9191)")
+    print(" [OK] Modo 2: Emulacao de Teclado Automatica (Wedge)")
+    print("="*55)
     
     t_pcsc = threading.Thread(target=run_pcsc_monitor, daemon=True)
     t_pcsc.start()
