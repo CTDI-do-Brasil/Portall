@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 import os
 import time
 import json
@@ -9,15 +9,27 @@ import base64
 import struct
 import threading
 import ctypes
+import traceback
 from ctypes import byref, c_size_t, create_string_buffer, Structure, c_char_p, c_byte, c_void_p, c_ulong, POINTER, c_long
 
-if hasattr(sys.stdout, 'reconfigure'):
-    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+BASE_DIR = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+LOG_FILE = os.path.join(BASE_DIR, "bridge.log")
+
+def log(msg):
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
+    except Exception:
+        pass
 
 PORT = 9191
 
-winscard = ctypes.windll.winscard
-user32 = ctypes.windll.user32
+try:
+    winscard = ctypes.windll.winscard
+    user32 = ctypes.windll.user32
+except Exception as e:
+    log(f"Erro ao carregar DLLs: {e}")
+    sys.exit(1)
 
 SCARDCONTEXT = c_size_t
 SCARDHANDLE = c_size_t
@@ -89,7 +101,7 @@ def type_text(text, press_enter=True):
             user32.keybd_event(0x0D, 0, 0, 0)
             user32.keybd_event(0x0D, 0, 2, 0)
     except Exception as e:
-        print(f"[Wedge] Erro ao digitar: {e}")
+        log(f"Erro ao simular digitacao: {e}")
 
 clients = set()
 clients_lock = threading.Lock()
@@ -134,13 +146,8 @@ def broadcast_tag(uid, standard="ISO 14443-3A", atr=""):
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     }
     
-    print("="*55)
-    print(f" >>> CARTAO BIPADO COM SUCESSO! <<<")
-    print(f" NUMERO / UID: {clean_uid}")
-    print(f" HORA:         {time.strftime('%H:%M:%S')}")
-    print("="*55)
+    log(f"CARTAO DETECTADO: UID={clean_uid}")
     
-    # WebSocket
     broadcast({
         "type": "NFC_TAG_DETECTED",
         "uid": clean_uid,
@@ -149,7 +156,6 @@ def broadcast_tag(uid, standard="ISO 14443-3A", atr=""):
         "timestamp": last_read_tag["timestamp"]
     })
     
-    # Keyboard Wedge
     threading.Thread(target=type_text, args=(clean_uid, True), daemon=True).start()
 
 def handle_client(sock, addr):
@@ -211,6 +217,9 @@ def handle_client(sock, addr):
                 mask = sock.recv(4) if is_masked else b""
                 data = sock.recv(length) if length > 0 else b""
                 
+                if is_masked and mask:
+                    data = bytes(b ^ mask[i % 4] for i, b in enumerate(data))
+                
                 if opcode == 0x09:
                     pong = bytes([0x8A, len(data)]) + data
                     sock.sendall(pong)
@@ -244,41 +253,71 @@ def handle_client(sock, addr):
             pass
 
 def run_ws_server():
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        server.bind(('0.0.0.0', PORT))
-        server.listen(10)
-        print(f"[*] Servidor WebSocket e HTTP ativo na porta {PORT}")
-        while True:
-            client_sock, addr = server.accept()
-            t = threading.Thread(target=handle_client, args=(client_sock, addr), daemon=True)
-            t.start()
-    except Exception as e:
-        print(f"[ERRO] Falha no servidor: {e}")
+    log(f"Iniciando servidor WebSocket na porta {PORT}...")
+    while True:
+        server = None
+        try:
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind(('0.0.0.0', PORT))
+            server.listen(15)
+            log(f"Servidor WebSocket ouvindo em 0.0.0.0:{PORT}")
+            while True:
+                try:
+                    client_sock, addr = server.accept()
+                    t = threading.Thread(target=handle_client, args=(client_sock, addr), daemon=True)
+                    t.start()
+                except Exception as e:
+                    time.sleep(0.1)
+        except Exception as e:
+            log(f"Falha ao vincular porta {PORT}: {e}. Tentando novamente em 2s...")
+            time.sleep(2)
+        finally:
+            if server:
+                try:
+                    server.close()
+                except Exception:
+                    pass
 
 def run_pcsc_monitor():
     global current_reader_name
+    log("Iniciando monitor PC/SC...")
     hCtx = SCARDCONTEXT()
-    res = winscard.SCardEstablishContext(SCARD_SCOPE_USER, None, None, byref(hCtx))
-    if res != 0:
-        print(f"[ERRO] Falha ao inicializar contexto PC/SC: {hex(res & 0xFFFFFFFF)}")
-        return
-
+    has_context = False
     was_present = False
-    
+
     while True:
         try:
+            if not has_context:
+                res = winscard.SCardEstablishContext(SCARD_SCOPE_USER, None, None, byref(hCtx))
+                if res == 0:
+                    has_context = True
+                    log(f"Contexto PC/SC estabelecido: hCtx={hex(hCtx.value)}")
+                else:
+                    time.sleep(2)
+                    continue
+
             rlen = DWORD(1024)
             buf = create_string_buffer(1024)
             res = winscard.SCardListReadersA(hCtx, None, buf, byref(rlen))
+            
+            if res != 0:
+                has_context = False
+                try:
+                    winscard.SCardReleaseContext(hCtx)
+                except Exception:
+                    pass
+                hCtx = SCARDCONTEXT()
+                time.sleep(2)
+                continue
+                
             readers = []
-            if res == 0 and rlen.value > 0:
+            if rlen.value > 0:
                 readers = [r.strip() for r in buf.raw[:rlen.value].decode('latin-1').split('\x00') if r.strip()]
             
             if not readers:
                 if current_reader_name is not None:
-                    print(f"[*] Leitor desconectado: {current_reader_name}")
+                    log(f"Leitor desconectado: {current_reader_name}")
                     broadcast({"type": "READER_DISCONNECTED", "reader": current_reader_name})
                     current_reader_name = None
                 time.sleep(1)
@@ -289,7 +328,7 @@ def run_pcsc_monitor():
             
             if current_reader_name != target_reader:
                 current_reader_name = target_reader
-                print(f"[*] Leitor conectado e pronto: {current_reader_name}")
+                log(f"Leitor ativo selecionado: {current_reader_name}")
                 broadcast({"type": "READER_CONNECTED", "reader": current_reader_name})
             
             name_bytes = target_reader.encode('latin-1')
@@ -332,23 +371,34 @@ def run_pcsc_monitor():
                     
             elif not is_present and was_present:
                 was_present = False
-                print(" [i] Cartao retirado do leitor. Aguardando proximo...")
                 broadcast({"type": "NFC_TAG_REMOVED"})
                 
             time.sleep(0.05)
             
         except Exception as e:
-            time.sleep(0.5)
+            log(f"Excecao em pcsc_monitor: {e}\n{traceback.format_exc()}")
+            has_context = False
+            time.sleep(1)
 
 if __name__ == "__main__":
-    print("="*60)
-    print("     PortALL - Bridge Local NFC ACR122U (Dual Mode)")
-    print("="*60)
-    print(" [OK] Modo 1: WebSocket (ws://localhost:9191)")
-    print(" [OK] Modo 2: Emulacao de Teclado Automatica (Wedge)")
-    print("="*60)
+    log("=== PortALL NFC Bridge Inicializado ===")
     
     t_pcsc = threading.Thread(target=run_pcsc_monitor, daemon=True)
     t_pcsc.start()
     
-    run_ws_server()
+    t_ws = threading.Thread(target=run_ws_server, daemon=True)
+    t_ws.start()
+    
+    try:
+        while True:
+            time.sleep(2)
+            if not t_pcsc.is_alive():
+                log("Reiniciando thread pcsc_monitor...")
+                t_pcsc = threading.Thread(target=run_pcsc_monitor, daemon=True)
+                t_pcsc.start()
+            if not t_ws.is_alive():
+                log("Reiniciando thread ws_server...")
+                t_ws = threading.Thread(target=run_ws_server, daemon=True)
+                t_ws.start()
+    except Exception as e:
+        log(f"Falha fatal no main loop: {e}\n{traceback.format_exc()}")
