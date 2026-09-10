@@ -41,9 +41,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
         company_name: string;
         is_active: boolean;
         is_safety: boolean;
+        can_approve_romaneio: boolean;
         created_at: string;
       }>(
-        `SELECT u.id, u.email, u.display_name, u.role, u.company_id, c.name as company_name, u.is_active, u.is_safety, u.created_at
+        `SELECT u.id, u.email, u.display_name, u.role, u.company_id, c.name as company_name, u.is_active, u.is_safety, u.can_approve_romaneio, u.created_at
          FROM users u
          LEFT JOIN companies c ON u.company_id = c.id
          WHERE (u.role != 'master' OR $1 = 'master')
@@ -61,9 +62,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
         company_name: string;
         is_active: boolean;
         is_safety: boolean;
+        can_approve_romaneio: boolean;
         created_at: string;
       }>(
-        `SELECT DISTINCT u.id, u.email, u.display_name, u.role, u.company_id, c.name as company_name, u.is_active, u.is_safety, u.created_at
+        `SELECT DISTINCT u.id, u.email, u.display_name, u.role, u.company_id, c.name as company_name, u.is_active, u.is_safety, u.can_approve_romaneio, u.created_at
          FROM users u
          LEFT JOIN companies c ON u.company_id = c.id
          WHERE u.role != 'master' AND u.company_id IN (
@@ -85,6 +87,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       companyId: u.company_id,
       companyName: u.company_name,
       isSafety: u.is_safety,
+      canApproveRomaneio: u.can_approve_romaneio,
       isActive: u.is_active,
       createdAt: u.created_at,
     })));
@@ -99,7 +102,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 // ============================================================
 router.post('/', async (req: AuthRequest, res: Response) => {
   try {
-    const { email, displayName, role, companyId, isSafety } = req.body;
+    const { email, displayName, role, companyId, isSafety, canApproveRomaneio, password } = req.body;
 
     if (!email || !displayName) {
       res.status(400).json({ error: 'Email e nome são obrigatórios.' });
@@ -139,8 +142,15 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const randomPassword = crypto.randomBytes(32).toString('hex');
-    const passwordHash = await bcrypt.hash(randomPassword, 12);
+    if (password && typeof password === 'string' && password.trim().length > 0 && password.trim().length < 8) {
+      res.status(400).json({ error: 'A senha deve ter no mínimo 8 caracteres.' });
+      return;
+    }
+
+    const rawPassword = (password && typeof password === 'string' && password.trim().length >= 8)
+      ? password.trim()
+      : crypto.randomBytes(32).toString('hex');
+    const passwordHash = await bcrypt.hash(rawPassword, 12);
 
     const user = await queryOne<{
       id: string;
@@ -150,12 +160,13 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       company_id: string;
       is_active: boolean;
       is_safety: boolean;
+      can_approve_romaneio: boolean;
       created_at: string;
     }>(
-      `INSERT INTO users (email, display_name, password_hash, role, company_id, is_safety)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, email, display_name, role, company_id, is_active, is_safety, created_at`,
-      [email.trim().toLowerCase(), displayName.trim(), passwordHash, userRole, targetCompanyId || null, !!isSafety]
+      `INSERT INTO users (email, display_name, password_hash, role, company_id, is_safety, can_approve_romaneio)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, email, display_name, role, company_id, is_active, is_safety, can_approve_romaneio, created_at`,
+      [email.trim().toLowerCase(), displayName.trim(), passwordHash, userRole, targetCompanyId || null, !!isSafety, !!canApproveRomaneio]
     );
 
     if (!user) {
@@ -272,7 +283,7 @@ async function canUpdateUser(reqUserId: string, reqUserRole: string, reqUserComp
 router.put('/:id', async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { displayName, email, role, companyId, isSafety } = req.body;
+    const { displayName, email, role, companyId, isSafety, canApproveRomaneio, password } = req.body;
 
     const canEdit = await canUpdateUser(req.user!.userId, req.user!.role, req.user!.companyId, id);
     if (!canEdit) {
@@ -286,18 +297,40 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    // Redefinição de senha, se fornecida
+    if (password && typeof password === 'string' && password.trim().length > 0) {
+      if (password.trim().length < 8) {
+        res.status(400).json({ error: 'A nova senha deve ter no mínimo 8 caracteres.' });
+        return;
+      }
+      const newHash = await bcrypt.hash(password.trim(), 12);
+      await query(
+        `UPDATE users SET password_hash = $1 WHERE id = $2`,
+        [newHash, id]
+      );
+    }
+
     const user = await queryOne<{
-      id: string; email: string; display_name: string; role: string; company_id: string; is_safety: boolean;
+      id: string; email: string; display_name: string; role: string; company_id: string; is_safety: boolean; can_approve_romaneio: boolean;
     }>(
       `UPDATE users 
        SET display_name = COALESCE($1, display_name),
            email = COALESCE($2, email),
            role = COALESCE($3, role),
            company_id = COALESCE($4, company_id),
-           is_safety = COALESCE($5, is_safety)
-       WHERE id = $6
-       RETURNING id, email, display_name, role, company_id, is_safety`,
-      [displayName?.trim(), email?.trim()?.toLowerCase(), role, companyId || null, isSafety !== undefined ? !!isSafety : null, id]
+           is_safety = COALESCE($5, is_safety),
+           can_approve_romaneio = COALESCE($6, can_approve_romaneio)
+       WHERE id = $7
+       RETURNING id, email, display_name, role, company_id, is_safety, can_approve_romaneio`,
+      [
+        displayName?.trim(), 
+        email?.trim()?.toLowerCase(), 
+        role, 
+        companyId || null, 
+        isSafety !== undefined ? !!isSafety : null, 
+        canApproveRomaneio !== undefined ? !!canApproveRomaneio : null, 
+        id
+      ]
     );
 
     if (!user) {
@@ -317,7 +350,8 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
       displayName: user.display_name,
       role: user.role,
       companyId: user.company_id,
-      isSafety: user.is_safety
+      isSafety: user.is_safety,
+      canApproveRomaneio: user.can_approve_romaneio
     });
   } catch (err) {
     console.error('PUT /users/:id error:', err);

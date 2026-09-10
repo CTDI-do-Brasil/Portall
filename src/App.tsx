@@ -3851,6 +3851,7 @@ function UsuariosView({ profile }: { profile: UserProfile }) {
   const [form, setForm] = useState({ 
     email: '', 
     displayName: '', 
+    password: '',
     role: 'viewer', 
     companyId: '', 
     managedCompanyIds: [] as string[], 
@@ -3879,6 +3880,7 @@ function UsuariosView({ profile }: { profile: UserProfile }) {
     setForm({ 
       email: '', 
       displayName: '', 
+      password: '',
       role: 'viewer', 
       companyId: profile.role === 'admin' ? (profile.companyId || '') : '', 
       managedCompanyIds: [], 
@@ -3894,6 +3896,7 @@ function UsuariosView({ profile }: { profile: UserProfile }) {
     setForm({ 
       email: user.email || '', 
       displayName: user.displayName || '', 
+      password: '',
       role: user.role || 'viewer', 
       companyId: user.companyId || '',
       managedCompanyIds: user.managedCompanyIds || [],
@@ -3906,9 +3909,16 @@ function UsuariosView({ profile }: { profile: UserProfile }) {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (form.password && form.password.trim().length > 0 && form.password.trim().length < 8) {
+      alert('A nova senha deve ter no mínimo 8 caracteres.');
+      return;
+    }
     setSaving(true);
     try {
-      const payload = { ...form };
+      const payload: any = { ...form };
+      if (!payload.password || payload.password.trim() === '') {
+        delete payload.password;
+      }
       if (profile.role === 'admin') {
         payload.role = 'viewer';
         payload.companyId = profile.companyId || form.companyId;
@@ -4078,6 +4088,14 @@ function UsuariosView({ profile }: { profile: UserProfile }) {
               )}
               <Input label="Nome Completo" value={form.displayName} onChange={v => setForm(f => ({ ...f, displayName: v }))} required placeholder="Nome do usuário" />
               <Input label="E-mail" type="email" value={form.email} onChange={v => setForm(f => ({ ...f, email: v }))} required placeholder="usuario@empresa.com" />
+              <Input 
+                label={editTarget ? "Redefinir Senha" : "Senha de Acesso"} 
+                type="password" 
+                value={form.password} 
+                onChange={v => setForm(f => ({ ...f, password: v }))} 
+                placeholder={editTarget ? "Deixe em branco para manter a atual" : "Opcional (mínimo 8 caracteres)"} 
+                hint={editTarget ? "Preencha apenas se desejar alterar a senha deste usuário (mínimo 8 caracteres)." : "Se informada, o usuário já poderá logar com esta senha sem depender do e-mail."} 
+              />
               {canEditRole && (
                 <div className="space-y-4">
                   <Select label="Perfil de Acesso" value={form.role} onChange={v => setForm(f => ({ ...f, role: v }))} required>
