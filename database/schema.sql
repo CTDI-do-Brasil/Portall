@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS pessoas (
   aso_data_realizacao DATE,
   epi_obrigatorio BOOLEAN DEFAULT FALSE,
   epi_descricao TEXT,
+  autorizado_operacao BOOLEAN NOT NULL DEFAULT TRUE,
 
   -- Termo de Segurança
   termo_assinado_at TIMESTAMPTZ,

@@ -7,7 +7,7 @@ import type {
   Patrimonio, PatrimonioLog
 } from './types';
 import {
-  LogOut, Users, Building2, ShieldCheck, ClipboardList, Settings,
+  LogOut, Users, Building2, ShieldCheck, ShieldAlert, ClipboardList, Settings,
   Plus, Trash2, Pencil, Eye, EyeOff, Search, ChevronLeft, ChevronRight,
   Menu, X, AlertTriangle, CheckCircle2, XCircle, Clock, Camera,
   Upload, ArrowRightCircle, ArrowLeftCircle, RefreshCw, BookOpen,
@@ -71,6 +71,11 @@ function getBlockingReasons(p: Pessoa) {
   // Se não estiver aprovado pela segurança (para prestadores)
   if (p.tipoAcesso === 'prestador' && p.isApproved === false) {
     reasons.push('Aguardando aprovação da Segurança do Trabalho (workflow obrigatório)');
+  }
+
+  // Autorização da operação para prestador
+  if (p.tipoAcesso === 'prestador' && p.autorizadoOperacao === false) {
+    reasons.push('Acesso à operação desabilitado / não autorizado pela gestão');
   }
 
   const parseSafe = (dStr: string | null | undefined) => {
@@ -1218,6 +1223,23 @@ function PortariaView({ profile, companies }: { profile: UserProfile, companies:
     }
   };
 
+  const handleToggleAutorizacao = async (p: Pessoa) => {
+    const novoStatus = p.autorizadoOperacao === false;
+    const acaoTexto = novoStatus ? 'habilitar' : 'desabilitar';
+    if (!confirm(`Deseja realmente ${acaoTexto} a autorização de acesso à operação para ${p.nomeCompleto}?`)) return;
+
+    setActionLoading(true);
+    try {
+      await api.patch(`/pessoas/${p.id}/autorizacao`, { autorizadoOperacao: novoStatus });
+      fetchPessoas();
+      setSelected(prev => prev ? { ...prev, autorizadoOperacao: novoStatus } : null);
+    } catch (err: any) {
+      alert(err.error || 'Erro ao alterar autorização.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const statusCount = {
     liberado:  baseFiltered.filter(p => p.statusAcesso === 'liberado').length,
     a_vencer:  baseFiltered.filter(p => p.statusAcesso === 'a_vencer').length,
@@ -1395,6 +1417,11 @@ function PortariaView({ profile, companies }: { profile: UserProfile, companies:
                         Pendente Segurança
                       </span>
                     )}
+                    {p.tipoAcesso === 'prestador' && p.autorizadoOperacao === false && (
+                      <span className="inline-block text-[9px] font-black bg-rose-50 text-rose-700 border border-rose-200 px-1.5 py-0.5 rounded mt-1 uppercase tracking-tighter">
+                        Op. Desautorizada
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center justify-between">
@@ -1438,6 +1465,11 @@ function PortariaView({ profile, companies }: { profile: UserProfile, companies:
                             {p.tipoAcesso === 'prestador' && !p.isApproved && (
                               <span className="inline-block text-[9px] font-black bg-amber-50 text-amber-700 border border-amber-200 px-1 rounded mt-0.5 uppercase tracking-tighter">
                                 Pendente Segurança
+                              </span>
+                            )}
+                            {p.tipoAcesso === 'prestador' && p.autorizadoOperacao === false && (
+                              <span className="inline-block text-[9px] font-black bg-rose-50 text-rose-700 border border-rose-200 px-1 rounded mt-0.5 uppercase tracking-tighter">
+                                Op. Desautorizada
                               </span>
                             )}
                           </div>
@@ -1540,6 +1572,7 @@ function PortariaView({ profile, companies }: { profile: UserProfile, companies:
                 { label: 'Notebook Autorizado', value: selected.notebookAutorizado ? 'Sim' : 'Não' },
                 ...(selected.tipoAcesso === 'prestador' ? [
                   { label: 'ASO / Saúde', value: fmtDate(selected.asoDataRealizacao) },
+                  { label: 'Autorização Operação', value: selected.autorizadoOperacao !== false ? 'Habilitada (Autorizado)' : 'Desabilitada (Suspenso)' },
                   { label: 'EPI Obrigatório', value: selected.epiObrigatorio ? `Sim — ${selected.epiDescricao || ''}` : 'Não' },
                 ] : []),
               ].map(({ label, value }) => (
@@ -1594,6 +1627,38 @@ function PortariaView({ profile, companies }: { profile: UserProfile, companies:
                       <AlertTriangle size={16} className="shrink-0" />
                       <span>Apenas um responsável pela Segurança do Trabalho pode aprovar este cadastro.</span>
                     </div>
+                  )}
+                </div>
+              )}
+
+              {selected.tipoAcesso === 'prestador' && (
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between gap-3 mb-1">
+                  <div>
+                    <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      {selected.autorizadoOperacao !== false ? (
+                        <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
+                      ) : (
+                        <span className="inline-block w-2 h-2 rounded-full bg-rose-500" />
+                      )}
+                      Autorização para Acessar a Operação
+                    </span>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      {selected.autorizadoOperacao !== false
+                        ? 'Prestador com autorização operacional ativa.'
+                        : 'Acesso suspenso/bloqueado pela gestão.'}
+                    </p>
+                  </div>
+                  {(profile.isSafety || profile.role === 'master' || profile.role === 'admin') && (
+                    <Button
+                      variant={selected.autorizadoOperacao !== false ? 'secondary' : 'primary'}
+                      size="sm"
+                      className={cn('text-xs font-bold shrink-0', 
+                        selected.autorizadoOperacao !== false ? 'text-rose-600 border-rose-200 hover:bg-rose-50' : 'bg-emerald-600 hover:bg-emerald-700 text-white')}
+                      onClick={() => handleToggleAutorizacao(selected)}
+                      disabled={actionLoading}
+                    >
+                      {selected.autorizadoOperacao !== false ? 'Desabilitar Acesso' : 'Habilitar Acesso'}
+                    </Button>
                   )}
                 </div>
               )}
@@ -1788,6 +1853,7 @@ type PessoaForm = {
   notebookPatrimonio: string;
   liberadoAte: string; descricaoAtividade: string;
   atividadeId: string; asoDataRealizacao: string; epiObrigatorio: boolean; epiDescricao: string;
+  autorizadoOperacao: boolean;
   treinamentos: { treinamentoId: string; dataRealizacao: string }[];
   companyId: string;
   nfcUid: string;
@@ -1800,6 +1866,7 @@ const emptyPessoaForm = (): PessoaForm => ({
   liberadoAte: '', descricaoAtividade: '',
   atividadeId: '',
   asoDataRealizacao: '', epiObrigatorio: false, epiDescricao: '',
+  autorizadoOperacao: true,
   treinamentos: [],
   companyId: '',
   nfcUid: '',
@@ -1989,6 +2056,7 @@ function PessoasView({ profile }: { profile: UserProfile }) {
       asoDataRealizacao: p.asoDataRealizacao ? p.asoDataRealizacao.split('T')[0] : '',
       epiObrigatorio: p.epiObrigatorio,
       epiDescricao: p.epiDescricao || '',
+      autorizadoOperacao: p.autorizadoOperacao !== false,
       treinamentos: p.treinamentos ? p.treinamentos.map(t => ({ 
         treinamentoId: t.treinamentoId, 
         dataRealizacao: t.dataRealizacao ? t.dataRealizacao.split('T')[0] : '' 
@@ -2020,6 +2088,20 @@ function PessoasView({ profile }: { profile: UserProfile }) {
       await fetchAll();
       setSuccessMsg(newStatus ? `"${p.nomeCompleto}" reativado com sucesso!` : `"${p.nomeCompleto}" desativado com sucesso.`);
     } catch (err: any) { alert(err.error || 'Erro ao alterar status.'); }
+    finally { setSaving(false); }
+  };
+
+  const handleToggleAutorizacao = async (p: Pessoa) => {
+    const novoStatus = p.autorizadoOperacao === false;
+    const acaoTexto = novoStatus ? 'habilitar' : 'desabilitar';
+    if (!confirm(`Deseja realmente ${acaoTexto} a autorização de acesso à operação para "${p.nomeCompleto}"?`)) return;
+
+    setSaving(true);
+    try {
+      await api.patch(`/pessoas/${p.id}/autorizacao`, { autorizadoOperacao: novoStatus });
+      await fetchAll();
+      setSuccessMsg(`Autorização de acesso de "${p.nomeCompleto}" ${novoStatus ? 'habilitada' : 'desabilitada'} com sucesso!`);
+    } catch (err: any) { alert(err.error || 'Erro ao alterar autorização.'); }
     finally { setSaving(false); }
   };
 
@@ -2142,6 +2224,17 @@ function PessoasView({ profile }: { profile: UserProfile }) {
                   <td className="px-4 py-3">
                     <div className="flex flex-col gap-1">
                       <StatusBadge status={p.statusAcesso} />
+                      {p.tipoAcesso === 'prestador' && (
+                        p.autorizadoOperacao !== false ? (
+                          <span className="text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded tracking-tighter uppercase w-fit" title="Autorizado a acessar a operação">
+                            Op. Autorizada
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-black bg-rose-100 text-rose-700 border border-rose-200 px-1.5 py-0.5 rounded tracking-tighter uppercase w-fit" title="Acesso à operação desabilitado">
+                            Op. Desautorizada
+                          </span>
+                        )
+                      )}
                       {p.tipoAcesso === 'prestador' && !p.isApproved && (
                         <span className="text-[10px] font-black bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded tracking-tighter uppercase w-fit">
                           Pendente Segurança
@@ -2156,6 +2249,18 @@ function PessoasView({ profile }: { profile: UserProfile }) {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1">
+                      {p.tipoAcesso === 'prestador' && (profile.isSafety || profile.role === 'master' || profile.role === 'admin') && (
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          onClick={() => handleToggleAutorizacao(p)}
+                          title={p.autorizadoOperacao !== false ? 'Desabilitar Autorização de Operação' : 'Habilitar Autorização de Operação'}
+                          disabled={saving}
+                          className={p.autorizadoOperacao !== false ? 'text-emerald-600 hover:text-rose-600' : 'text-rose-600 hover:text-emerald-600'}
+                        >
+                          {p.autorizadoOperacao !== false ? <ShieldCheck size={14} /> : <ShieldAlert size={14} />}
+                        </Button>
+                      )}
                       {p.tipoAcesso === 'prestador' && !p.isApproved && (profile.isSafety || profile.role === 'master') && (
                         <Button 
                           variant="ghost" 
@@ -2372,6 +2477,18 @@ function PessoasView({ profile }: { profile: UserProfile }) {
                   <h4 className="text-xs font-bold text-blue-600 uppercase tracking-wider">Dados do Prestador</h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <p className="text-xs text-blue-500 italic md:col-span-2">A data do ASO e treinamentos determinam a validade do acesso no campo acima.</p>
+                  </div>
+                  <div className="p-3 bg-white/90 rounded-xl border border-blue-200 shadow-sm">
+                    <Toggle 
+                      label="Autorizado a Acessar a Operação" 
+                      checked={form.autorizadoOperacao} 
+                      onChange={v => setForm(f => ({ ...f, autorizadoOperacao: v }))} 
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      {form.autorizadoOperacao 
+                        ? 'Prestador com autorização operacional de acesso ativa (dependerá também da validade do ASO).' 
+                        : 'Acesso bloqueado na portaria por desautorização da gestão (independente da validade do ASO).'}
+                    </p>
                   </div>
                   <Toggle label="EPI obrigatório" checked={form.epiObrigatorio} onChange={v => setForm(f => ({ ...f, epiObrigatorio: v }))} />
                   {form.epiObrigatorio && (

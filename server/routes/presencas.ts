@@ -6,9 +6,23 @@ const router = Router();
 
 router.use(requireAuth);
 
-function calculateStatus(liberadoAte: Date | null, asoVencimento: Date | null, treinamentos: { vencimento: Date }[]): 'liberado' | 'a_vencer' | 'bloqueado' {
+function calculateStatus(
+  liberadoAte: Date | null, 
+  asoVencimento: Date | null, 
+  treinamentos: { vencimento: Date }[],
+  isApproved: boolean = true,
+  autorizadoOperacao: boolean = true,
+  tipoAcesso: string = 'visitante'
+): 'liberado' | 'a_vencer' | 'bloqueado' {
   const now = new Date();
   
+  if (!isApproved) return 'bloqueado';
+
+  if (tipoAcesso === 'prestador') {
+    if (!autorizadoOperacao) return 'bloqueado';
+    if (!asoVencimento || asoVencimento < now) return 'bloqueado';
+  }
+
   if (liberadoAte && liberadoAte < now) return 'bloqueado';
   if (asoVencimento && asoVencimento < now) return 'bloqueado';
   
@@ -86,8 +100,10 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       id: string; company_id: string; tipo_acesso: string; 
       nome_completo: string; documento: string;
       liberado_ate: string; aso_data_realizacao: string;
+      is_approved: boolean; autorizado_operacao: boolean;
+      is_active: boolean;
     }>(
-      'SELECT id, company_id, tipo_acesso, nome_completo, documento, liberado_ate, aso_data_realizacao FROM pessoas WHERE id = $1',
+      'SELECT id, company_id, tipo_acesso, nome_completo, documento, liberado_ate, aso_data_realizacao, is_approved, autorizado_operacao, is_active FROM pessoas WHERE id = $1',
       [pessoaId]
     );
 
@@ -111,22 +127,49 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 
     // Calcula status atual para barrar ENTRADA se tiver bloqueado
     if (status === 'entrada') {
-       const links = await query(
-         'SELECT data_vencimento FROM treinamentos_pessoa WHERE pessoa_id = $1', [pessoa.id]
-       );
-       let asoVencimento = null;
-       if (pessoa.aso_data_realizacao) {
-          asoVencimento = new Date(pessoa.aso_data_realizacao);
-          asoVencimento.setFullYear(asoVencimento.getFullYear() + 1);
-       }
-       const liberadoAteDate = pessoa.liberado_ate ? new Date(pessoa.liberado_ate) : null;
-       const venci = links.map((l: any) => ({ vencimento: new Date(l.data_vencimento) }));
-       
-       const st = calculateStatus(liberadoAteDate, asoVencimento, venci);
-       if (st === 'bloqueado') {
-          res.status(403).json({ error: 'ACESSO BLOQUEADO: Cadastro vencido ou prazo expirado.' });
+      if (pessoa.is_active === false) {
+        res.status(403).json({ error: 'ACESSO BLOQUEADO: Cadastro desativado no sistema.' });
+        return;
+      }
+
+      if (pessoa.tipo_acesso === 'prestador') {
+        if (pessoa.is_approved === false) {
+          res.status(403).json({ error: 'ACESSO BLOQUEADO: Cadastro aguardando aprovação da Segurança do Trabalho.' });
           return;
-       }
+        }
+
+        if (pessoa.autorizado_operacao === false) {
+          res.status(403).json({ error: 'ACESSO BLOQUEADO: Prestador sem autorização ativa para acessar a operação.' });
+          return;
+        }
+
+        if (!pessoa.aso_data_realizacao) {
+          res.status(403).json({ error: 'ACESSO BLOQUEADO: Falta realizar ou registrar a data do ASO.' });
+          return;
+        }
+
+        const asoVenc = new Date(pessoa.aso_data_realizacao);
+        asoVenc.setFullYear(asoVenc.getFullYear() + 1);
+        if (asoVenc < new Date()) {
+          res.status(403).json({ error: 'ACESSO BLOQUEADO: ASO Vencido (exame realizado há mais de 1 ano).' });
+          return;
+        }
+      }
+
+      const liberadoAteDate = pessoa.liberado_ate ? new Date(pessoa.liberado_ate) : null;
+      if (liberadoAteDate && liberadoAteDate < new Date()) {
+        res.status(403).json({ error: 'ACESSO BLOQUEADO: Prazo de liberação do cadastro expirado.' });
+        return;
+      }
+
+      const links = await query(
+        'SELECT data_vencimento FROM treinamentos_pessoa WHERE pessoa_id = $1', [pessoa.id]
+      );
+      const hasTreinamentoVencido = links.some((l: any) => new Date(l.data_vencimento) < new Date());
+      if (hasTreinamentoVencido) {
+        res.status(403).json({ error: 'ACESSO BLOQUEADO: Prestador possui treinamento obrigatório vencido.' });
+        return;
+      }
     }
 
     const log = await queryOne<{ id: string, timestamp: string }>(

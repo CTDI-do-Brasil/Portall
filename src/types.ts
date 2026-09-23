@@ -103,6 +103,7 @@ export interface Pessoa {
   armario?: string | null;
   
   isApproved?: boolean;
+  autorizadoOperacao?: boolean;
   termoAssinadoEm?: string;
   termoAssinatura?: string;
 

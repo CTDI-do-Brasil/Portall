@@ -116,11 +116,27 @@ router.get('/:id/termos/:filename/download', async (req, res) => {
 router.use(requireAuth);
 
 // Helper para calcular o status geral e verificar vencimentos
-function calculateStatus(liberadoAte: Date | null, asoVencimento: Date | null, treinamentos: { vencimento: Date }[], isApproved: boolean = true): 'liberado' | 'a_vencer' | 'bloqueado' {
+function calculateStatus(
+  liberadoAte: Date | null, 
+  asoVencimento: Date | null, 
+  treinamentos: { vencimento: Date }[], 
+  isApproved: boolean = true,
+  autorizadoOperacao: boolean = true,
+  tipoAcesso: string = 'visitante'
+): 'liberado' | 'a_vencer' | 'bloqueado' {
   const now = new Date();
   
   // Se não estiver aprovado pela segurança (para prestadores), está bloqueado independente do resto
   if (!isApproved) return 'bloqueado';
+
+  // Validações específicas para Prestador de Serviço
+  if (tipoAcesso === 'prestador') {
+    // 1. Deve estar autorizado para a operação
+    if (!autorizadoOperacao) return 'bloqueado';
+
+    // 2. Confirmação da validade do ASO (deve existir e estar válido)
+    if (!asoVencimento || asoVencimento < now) return 'bloqueado';
+  }
 
   if (liberadoAte && liberadoAte < now) return 'bloqueado';
   if (asoVencimento && asoVencimento < now) return 'bloqueado';
@@ -282,7 +298,8 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       const vencimentos = tpps.map(t => ({ vencimento: new Date(t.dataVencimento) }));
 
       const isApproved = !!p.is_approved;
-      const statusAcesso = calculateStatus(liberadoAteDate, asoVencimento, vencimentos, isApproved);
+      const autorizadoOperacao = p.autorizado_operacao !== false;
+      const statusAcesso = calculateStatus(liberadoAteDate, asoVencimento, vencimentos, isApproved, autorizadoOperacao, p.tipo_acesso);
 
       return {
         id: p.id,
@@ -304,6 +321,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
         epiObrigatorio: p.epi_obrigatorio,
         epiDescricao: p.epi_descricao,
         isApproved,
+        autorizadoOperacao,
         statusAcesso,
         treinamentos: tpps,
         lastPresenceStatus: p.last_presence_status,
@@ -397,8 +415,9 @@ router.get('/nfc/:uid', async (req: AuthRequest, res: Response) => {
     
     const liberadoAteDate = p.liberado_ate ? new Date(p.liberado_ate) : null;
     const isApproved = !!p.is_approved;
+    const autorizadoOperacao = p.autorizado_operacao !== false;
     const vencimentos = mappedTreinamentos.map(t => ({ vencimento: new Date(t.dataVencimento) }));
-    const statusAcesso = calculateStatus(liberadoAteDate, asoVencimento, vencimentos, isApproved);
+    const statusAcesso = calculateStatus(liberadoAteDate, asoVencimento, vencimentos, isApproved, autorizadoOperacao, p.tipo_acesso);
 
     res.json({
       id: p.id,
@@ -420,6 +439,7 @@ router.get('/nfc/:uid', async (req: AuthRequest, res: Response) => {
       epiObrigatorio: p.epi_obrigatorio,
       epiDescricao: p.epi_descricao,
       isApproved,
+      autorizadoOperacao,
       statusAcesso,
       treinamentos: mappedTreinamentos,
       lastPresenceStatus: p.last_presence_status,
@@ -521,8 +541,9 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
     
     const liberadoAteDate = p.liberado_ate ? new Date(p.liberado_ate) : null;
     const isApproved = !!p.is_approved;
+    const autorizadoOperacao = p.autorizado_operacao !== false;
     const vencimentos = mappedTreinamentos.map(t => ({ vencimento: new Date(t.dataVencimento) }));
-    const statusAcesso = calculateStatus(liberadoAteDate, asoVencimento, vencimentos, isApproved);
+    const statusAcesso = calculateStatus(liberadoAteDate, asoVencimento, vencimentos, isApproved, autorizadoOperacao, p.tipo_acesso);
 
     res.json({
       id: p.id,
@@ -544,6 +565,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
       epiObrigatorio: p.epi_obrigatorio,
       epiDescricao: p.epi_descricao,
       isApproved,
+      autorizadoOperacao,
       statusAcesso,
       treinamentos: mappedTreinamentos,
       lastPresenceStatus: p.last_presence_status,
@@ -656,6 +678,13 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       isApproved = false;
     }
 
+    let finalAutorizadoOperacao = true;
+    if (tipoAcesso === 'prestador') {
+      if (req.body.autorizadoOperacao !== undefined) {
+        finalAutorizadoOperacao = !!req.body.autorizadoOperacao;
+      }
+    }
+
     const finalEmpresaOrigemId = await resolveEmpresaOrigem(empresaOrigemId, companyId);
     const cleanNfcUid = nfcUid ? String(nfcUid).replace(/[^a-fA-F0-9]/g, '').toUpperCase() : null;
 
@@ -665,8 +694,8 @@ router.post('/', async (req: AuthRequest, res: Response) => {
         company_id, tipo_acesso, foto, nome_completo, documento, empresa_origem_id, responsavel_interno,
         celular_autorizado, celular_imei, notebook_autorizado, notebook_marca, notebook_patrimonio, 
         liberado_ate, descricao_atividade, atividade_id, aso_data_realizacao, epi_obrigatorio, 
-        epi_descricao, created_by, is_approved, nfc_uid
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+        epi_descricao, created_by, is_approved, nfc_uid, autorizado_operacao
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
       RETURNING id`,
       [
         companyId, tipoAcesso, foto, nomeCompleto, documento, finalEmpresaOrigemId || null, responsavelInterno,
@@ -678,7 +707,8 @@ router.post('/', async (req: AuthRequest, res: Response) => {
         tipoAcesso === 'prestador' ? epiDescricao : null,
         req.user!.userId,
         isApproved,
-        cleanNfcUid || null
+        cleanNfcUid || null,
+        finalAutorizadoOperacao
       ]
     );
 
@@ -877,7 +907,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
       celularAutorizado, celularImei, notebookAutorizado, notebookMarca, notebookPatrimonio,
       liberadoAte, descricaoAtividade,
       atividadeId, asoDataRealizacao, epiObrigatorio, epiDescricao,
-      treinamentos, nfcUid
+      treinamentos, nfcUid, autorizadoOperacao
     } = req.body;
 
     const finalEmpresaOrigemId = await resolveEmpresaOrigem(empresaOrigemId, companyId);
@@ -891,8 +921,10 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
         celular_imei = $9, notebook_autorizado = $10, notebook_marca = $11, 
         notebook_patrimonio = $12, liberado_ate = $13, descricao_atividade = $14, 
         atividade_id = $15, aso_data_realizacao = $16, epi_obrigatorio = $17, 
-        epi_descricao = $18, nfc_uid = $19, updated_at = NOW()
-       WHERE id = $20`,
+        epi_descricao = $18, nfc_uid = $19, 
+        autorizado_operacao = COALESCE($20, autorizado_operacao),
+        updated_at = NOW()
+       WHERE id = $21`,
       [
         companyId, tipoAcesso, foto, nomeCompleto, documento, finalEmpresaOrigemId || null, responsavelInterno,
         celularAutorizado, celularImei || null, notebookAutorizado, notebookMarca || null, 
@@ -902,6 +934,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
         tipoAcesso === 'prestador' ? epiObrigatorio : false,
         tipoAcesso === 'prestador' ? epiDescricao : null,
         cleanNfcUid || null,
+        autorizadoOperacao !== undefined ? !!autorizadoOperacao : null,
         id
       ]
     );
@@ -1076,6 +1109,70 @@ router.patch('/:id/status', async (req: AuthRequest, res: Response) => {
   } catch (err: any) {
     console.error('PATCH /pessoas/:id/status error:', err);
     res.status(500).json({ error: 'Erro ao alterar status da pessoa.' });
+  }
+});
+
+// ============================================================
+// PATCH /api/pessoas/:id/autorizacao - Habilita/Desabilita autorização de acesso à operação
+// ============================================================
+router.patch('/:id/autorizacao', async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { autorizadoOperacao } = req.body;
+
+    if (autorizadoOperacao === undefined) {
+      res.status(400).json({ error: 'Campo autorizadoOperacao é obrigatório (true/false).' });
+      return;
+    }
+
+    // Permissão: Apenas Segurança, Admin ou Master
+    if (!req.user?.isSafety && req.user?.role !== 'master' && req.user?.role !== 'admin') {
+      res.status(403).json({ error: 'Você não tem permissão para alterar a autorização de acesso à operação.' });
+      return;
+    }
+
+    // Validação Multi-tenant
+    const hasAccess = await canAccessPessoa(req, id);
+    if (!hasAccess) {
+      res.status(403).json({ error: 'Você não tem permissão para alterar o status deste cadastro.' });
+      return;
+    }
+
+    const updated = await queryOne<{ id: string, nome_completo: string, documento: string, tipo_acesso: string }>(
+      `UPDATE pessoas 
+       SET autorizado_operacao = $1, updated_at = NOW() 
+       WHERE id = $2 
+       RETURNING id, nome_completo, documento, tipo_acesso`,
+      [!!autorizadoOperacao, id]
+    );
+
+    if (!updated) {
+      res.status(404).json({ error: 'Cadastro não encontrado.' });
+      return;
+    }
+
+    const action = autorizadoOperacao ? 'AUTORIZACAO_ACESSO_HABILITADA' : 'AUTORIZACAO_ACESSO_DESABILITADA';
+    await query(
+      `INSERT INTO system_logs (user_id, action, entity_type, entity_id, details)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        req.user!.userId,
+        action,
+        'pessoa',
+        id,
+        JSON.stringify({ 
+          nome_completo: updated.nome_completo, 
+          documento: updated.documento,
+          autorizado_operacao: !!autorizadoOperacao,
+          alterado_por: req.user.email
+        })
+      ]
+    );
+
+    res.json({ success: true, autorizadoOperacao: !!autorizadoOperacao });
+  } catch (err: any) {
+    console.error('PATCH /pessoas/:id/autorizacao error:', err);
+    res.status(500).json({ error: 'Erro ao alterar autorização de acesso da pessoa.' });
   }
 });
 
