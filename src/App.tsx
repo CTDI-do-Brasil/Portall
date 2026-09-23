@@ -2422,11 +2422,35 @@ function PessoasView({ profile }: { profile: UserProfile }) {
                     value={form.asoDataRealizacao} 
                     onChange={handleAsoUpdate} 
                     required 
-                    hint={form.tipoAcesso === 'visitante' ? 'Acesso liberado por 1 semana' : 'Calcula validade mínima (ASO + Treinamentos)'} 
+                    hint={form.tipoAcesso === 'visitante' ? 'Acesso liberado por 1 semana' : '1ª Etapa: Validade do ASO'} 
                   />
                 </div>
                 <Input label="Acesso Válido Até" type="date" value={form.liberadoAte} onChange={v => setForm(f => ({ ...f, liberadoAte: v }))} required hint="Data calculada automaticamente" />
-                <Input label="Descrição da Atividade / Visita" value={form.descricaoAtividade} onChange={v => setForm(f => ({ ...f, descricaoAtividade: v }))} placeholder="Descreva o motivo do acesso" />
+                
+                {form.tipoAcesso === 'prestador' && (
+                  <div className="md:col-span-2 p-3.5 bg-blue-50/80 border border-blue-200 rounded-xl flex items-center justify-between gap-4">
+                    <div>
+                      <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                        <span className={cn('w-2.5 h-2.5 rounded-full', form.autorizadoOperacao ? 'bg-emerald-500' : 'bg-rose-500')} />
+                        2ª Etapa: Autorização para Acessar a Operação
+                      </span>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        {form.autorizadoOperacao 
+                          ? 'Prestador com autorização operacional Habilitada (Liberado para entrar se ASO estiver em dia).' 
+                          : 'Acesso Desabilitado (Bloqueia a entrada na portaria mesmo com ASO válido).'}
+                      </p>
+                    </div>
+                    <Toggle 
+                      label={form.autorizadoOperacao ? 'Habilitado' : 'Desabilitado'} 
+                      checked={form.autorizadoOperacao} 
+                      onChange={v => setForm(f => ({ ...f, autorizadoOperacao: v }))} 
+                    />
+                  </div>
+                )}
+
+                <div className="md:col-span-2">
+                  <Input label="Descrição da Atividade / Visita" value={form.descricaoAtividade} onChange={v => setForm(f => ({ ...f, descricaoAtividade: v }))} placeholder="Descreva o motivo do acesso" />
+                </div>
               </div>
 
               {/* Permissões */}
@@ -2477,18 +2501,6 @@ function PessoasView({ profile }: { profile: UserProfile }) {
                   <h4 className="text-xs font-bold text-blue-600 uppercase tracking-wider">Dados do Prestador</h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <p className="text-xs text-blue-500 italic md:col-span-2">A data do ASO e treinamentos determinam a validade do acesso no campo acima.</p>
-                  </div>
-                  <div className="p-3 bg-white/90 rounded-xl border border-blue-200 shadow-sm">
-                    <Toggle 
-                      label="Autorizado a Acessar a Operação" 
-                      checked={form.autorizadoOperacao} 
-                      onChange={v => setForm(f => ({ ...f, autorizadoOperacao: v }))} 
-                    />
-                    <p className="text-[11px] text-slate-500 mt-1">
-                      {form.autorizadoOperacao 
-                        ? 'Prestador com autorização operacional de acesso ativa (dependerá também da validade do ASO).' 
-                        : 'Acesso bloqueado na portaria por desautorização da gestão (independente da validade do ASO).'}
-                    </p>
                   </div>
                   <Toggle label="EPI obrigatório" checked={form.epiObrigatorio} onChange={v => setForm(f => ({ ...f, epiObrigatorio: v }))} />
                   {form.epiObrigatorio && (
